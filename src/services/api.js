@@ -7,11 +7,14 @@ async function toJson(res) {
 
 export const api = {
   async listModels() {
+      console.log('Fetching models from:', `${BASE}/api/models`);
     try {
-      return await toJson(
-        await fetch(`${BASE}/api/models`, { credentials: "include" })
-      );
-    } catch {
+      const res = await fetch(`${BASE}/api/models`, { credentials: "include" });
+      const data = await res.json();
+      console.log('Models received:', data);
+      return data;
+    } catch(error) {
+      console.error('Error fetching models:', error);
       // Mock fallback
       return {
         models: [

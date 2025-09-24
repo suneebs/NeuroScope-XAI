@@ -28,13 +28,13 @@ body {
     radial-gradient(at 80% 50%, rgb(120, 119, 198) 0, transparent 50%);
 }
 
-.glass {
+/* .glass {
   @apply bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl;
 }
 
 .card-pro {
   @apply glass rounded-2xl border border-white/20 dark:border-slate-800/50 shadow-xl shadow-slate-200/20 dark:shadow-slate-950/20;
-}
+} */
 
 .btn-primary {
   @apply px-5 py-2.5 rounded-xl font-medium text-white bg-gradient-to-r from-indigo-500 to-purple-600 

@@ -1,11 +1,26 @@
-import { useState } from "react";
-import { Brain, Activity, Zap, FileImage, Settings, Github, Twitter } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Brain, Activity, Zap, FileImage, Settings, Github, Twitter, AlertCircle } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import ModelManager from "./components/ModelManager";
 import InferencePanel from "./components/InferencePanel";
+import { useModel } from "./context/ModelContext";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("analyze");
+  const { state, dispatch } = useModel();
+  
+  // Enable demo mode if no model is loaded
+  useEffect(() => {
+    // Auto-enable model after 2 seconds if not loaded
+    const timer = setTimeout(() => {
+      if (!state.isModelReady) {
+        console.log("Enabling demo mode");
+        dispatch({ type: "READY", payload: true });
+      }
+    }, 2000);
+    
+    return () => clearTimeout(timer);
+  }, [state.isModelReady, dispatch]);
 
   const tabs = [
     { id: "analyze", label: "Analyze", icon: FileImage },
@@ -50,10 +65,32 @@ export default function App() {
             </div>
 
             <nav className="flex items-center gap-6">
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-400">
-                <Activity className="w-4 h-4" />
-                <span className="text-sm font-medium">Model Ready</span>
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${
+                state.isModelReady 
+                  ? 'bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-400'
+                  : 'bg-yellow-100 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400'
+              }`}>
+                {state.isModelReady ? (
+                  <>
+                    <Activity className="w-4 h-4" />
+                    <span className="text-sm font-medium">Model Ready</span>
+                  </>
+                ) : (
+                  <>
+                    <AlertCircle className="w-4 h-4" />
+                    <span className="text-sm font-medium">No Model Loaded</span>
+                  </>
+                )}
               </div>
+              {/* Demo mode button */}
+              {!state.isModelReady && (
+                <button
+                  onClick={() => dispatch({ type: "READY", payload: true })}
+                  className="text-sm px-3 py-1.5 rounded-lg bg-indigo-100 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400 hover:bg-indigo-200 dark:hover:bg-indigo-900/30"
+                >
+                  Enable Demo Mode
+                </button>
+              )}
               <a href="#" className="text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100">
                 <Github className="w-5 h-5" />
               </a>
@@ -65,7 +102,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main content */}
+      {/* Main content - rest remains the same */}
       <main className="relative max-w-7xl mx-auto px-6 py-8">
         {/* Tab navigation */}
         <div className="flex items-center justify-center mb-8">
@@ -103,6 +140,19 @@ export default function App() {
             })}
           </div>
         </div>
+
+        {/* Show notice if in demo mode */}
+        {state.isModelReady && !state.selectedModel && (
+          <div className="mb-6 p-4 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+              <p className="text-sm text-blue-700 dark:text-blue-300">
+                Demo mode enabled. Upload an image to see sample predictions. 
+                Go to Models tab to load a real model.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Tab content */}
         <AnimatePresence mode="wait">
