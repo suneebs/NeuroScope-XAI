@@ -1,42 +1,52 @@
-import { useState } from "react";
-import { motion } from "framer-motion";
-import { Upload, Brain, Loader2, FileImage } from "lucide-react";
+// frontend/src/components/InferencePanel.jsx
+import { useEffect, useState } from "react";
 import { api } from "../services/api";
-import ComprehensiveAnalysis from "./ComprehensiveAnalysis";
 
 export default function InferencePanel() {
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const [modelReady, setModelReady] = useState(false);
 
-  const handleFileSelect = (e) => {
+  useEffect(() => {
+    (async () => {
+      try {
+        const s = await api.status();
+        setModelReady(!!s.model_loaded);
+      } catch {
+        setModelReady(false);
+      }
+    })();
+  }, []);
+
+  const onFileChange = (e) => {
     const f = e.target.files?.[0];
-    if (f) {
-      setFile(f);
-      setPreview(URL.createObjectURL(f));
-      setResult(null);
-    }
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    const f = e.dataTransfer.files?.[0];
-    if (f) {
-      setFile(f);
-      setPreview(URL.createObjectURL(f));
-      setResult(null);
-    }
+    if (!f) return;
+    setFile(f);
+    setPreview(URL.createObjectURL(f));
+    setResult(null);
+    setError("");
   };
 
   const run = async () => {
     if (!file) return;
     setRunning(true);
+    setError("");
     try {
-      const res = await api.infer(file);
-      setResult(res);
-    } catch (e) {
-      console.error(e);
+      if (!modelReady) {
+        setError("Backend model not loaded. Put your model files in backend/models and restart the server, or POST /api/models/reload.");
+        setRunning(false);
+        return;
+      }
+      // Quick first
+      const quick = await api.infer(file, "quick");
+      setResult(quick);
+      // Upgrade to full (non-blocking)
+      api.infer(file, "full").then(setResult).catch(() => {});
+    } catch (err) {
+      setError(err.message || "Failed to analyze image.");
     } finally {
       setRunning(false);
     }
@@ -46,106 +56,192 @@ export default function InferencePanel() {
     setFile(null);
     setPreview(null);
     setResult(null);
+    setError("");
   };
 
   return (
     <div className="space-y-8">
-      {/* Upload Section */}
-      {!result && (
-        <motion.section
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="card-pro p-6 max-w-4xl mx-auto"
-        >
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center">
-              <FileImage className="w-5 h-5 text-white" />
+      <section className="bg-white border rounded-xl p-6">
+        <h2 className="font-semibold text-lg mb-4">Upload Brain MRI</h2>
+
+        {!modelReady && (
+          <div className="mb-4 p-3 rounded-lg bg-yellow-50 border border-yellow-200 text-sm text-yellow-700">
+            Model not loaded. Place model in backend/models (brain_tumor_model.h5 or model_architecture.json + model.weights.h5), restart backend, or POST /api/models/reload.
+          </div>
+        )}
+
+        <input
+          type="file"
+          accept="image/*"
+          onChange={onFileChange}
+          className="block w-full text-sm text-slate-700 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+        />
+
+        {preview && (
+          <div className="mt-4">
+            <img src={preview} alt="preview" className="w-full max-w-md rounded-lg border" />
+          </div>
+        )}
+
+        {error && (
+          <div className="mt-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
+            {error}
+          </div>
+        )}
+
+        <div className="mt-4 flex items-center gap-3">
+          <button
+            onClick={run}
+            disabled={!file || running}
+            className="px-5 py-2.5 rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {running ? "Analyzing..." : "Analyze MRI"}
+          </button>
+          <button onClick={reset} className="px-5 py-2.5 rounded-lg border">Clear</button>
+        </div>
+      </section>
+
+      {result && (
+        <section className="bg-white border rounded-xl p-6">
+          <h2 className="font-semibold text-lg mb-4">AI Analysis Results</h2>
+
+          <div className="mb-4 p-4 rounded-lg bg-slate-50">
+            <div className="flex items-center justify-between">
+              <div className="text-xl font-semibold">{result?.prediction?.label || "N/A"}</div>
+              <div className="text-lg">
+                {result?.prediction?.probability != null
+                  ? `${(result.prediction.probability * 100).toFixed(1)}%`
+                  : "—"}
+              </div>
             </div>
-            <h2 className="text-xl font-semibold">Upload Brain MRI for Complete Analysis</h2>
+            <div className="text-sm text-slate-600 mt-1">
+              {result?.summary?.validation ? `Validation: ${result.summary.validation}` : ""}
+            </div>
           </div>
 
-          {!preview ? (
-            <div
-              className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl p-12 text-center hover:border-indigo-500 dark:hover:border-indigo-500 transition-colors cursor-pointer"
-              onClick={() => document.getElementById("file-input").click()}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={handleDrop}
-            >
-              <Upload className="w-12 h-12 mx-auto text-slate-400 mb-4" />
-              <h3 className="font-medium text-lg mb-2">Drop your MRI scan here</h3>
-              <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
-                or click to browse files
-              </p>
-              <p className="text-xs text-slate-500">
-                Supports: PNG, JPG, JPEG • Max 10MB
-              </p>
-              <input
-                id="file-input"
-                type="file"
-                accept="image/*"
-                onChange={handleFileSelect}
-                className="hidden"
-              />
+          <div className="grid md:grid-cols-2 gap-6">
+            <div>
+              <h3 className="font-medium mb-2">Original</h3>
+              {result?.visualizations?.original ? (
+                <img src={result.visualizations.original} alt="original" className="w-full rounded-lg border" />
+              ) : (
+                <div className="h-56 rounded-lg bg-slate-100 grid place-items-center text-slate-500">Not available</div>
+              )}
             </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="max-w-md mx-auto">
-                <img
-                  src={preview}
-                  alt="MRI scan"
-                  className="w-full rounded-xl shadow-lg"
-                />
-              </div>
 
-              <div className="flex items-center justify-between">
-                <div className="text-sm">
-                  <p className="font-medium">{file.name}</p>
-                  <p className="text-slate-600 dark:text-slate-400">
-                    {(file.size / 1024 / 1024).toFixed(2)} MB
-                  </p>
-                </div>
-                <button onClick={reset} className="btn-secondary">
-                  Change Image
-                </button>
-              </div>
+            <div>
+              <h3 className="font-medium mb-2">AI Focus Areas</h3>
+              {result?.visualizations?.sensitivity_overlay ? (
+                <img src={result.visualizations.sensitivity_overlay} alt="focus" className="w-full rounded-lg border" />
+              ) : (
+                <div className="h-56 rounded-lg bg-slate-100 grid place-items-center text-slate-500">Not available</div>
+              )}
+            </div>
 
-              <button
-                onClick={run}
-                disabled={running}
-                className="btn-primary w-full flex items-center justify-center gap-2"
-              >
-                {running ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Performing Complete TrueExplainableAI Analysis...
-                  </>
+            <div>
+              <h3 className="font-medium mb-2">Analyzed Regions</h3>
+              {result?.visualizations?.regions_marked ? (
+                <img src={result.visualizations.regions_marked} alt="regions" className="w-full rounded-lg border" />
+              ) : (
+                <div className="h-56 rounded-lg bg-slate-100 grid place-items-center text-slate-500">Not available</div>
+              )}
+            </div>
+
+            <div>
+              <h3 className="font-medium mb-2">Probability Distribution</h3>
+              <div className="space-y-2">
+                {result?.all_predictions ? (
+                  Object.entries(result.all_predictions).map(([label, p]) => (
+                    <div key={label}>
+                      <div className="flex items-center justify-between text-sm">
+                        <span>{label}</span>
+                        <span>{(p * 100).toFixed(1)}%</span>
+                      </div>
+                      <div className="w-full h-2 rounded bg-slate-200 overflow-hidden">
+                        <div className="h-2 bg-indigo-500" style={{ width: `${p * 100}%` }} />
+                      </div>
+                    </div>
+                  ))
                 ) : (
-                  <>
-                    <Brain className="w-4 h-4" />
-                    Start Comprehensive Analysis
-                  </>
+                  <div className="text-sm text-slate-500">No data</div>
                 )}
-              </button>
-
-              <div className="text-sm text-slate-600 dark:text-slate-400 text-center">
-                This will perform occlusion analysis, Grad-CAM visualization, 
-                pattern recognition, and generate a complete medical interpretation.
               </div>
+            </div>
+          </div>
+
+          <div className="mt-6 grid md:grid-cols-2 gap-6">
+            <div className="p-4 rounded-lg bg-blue-50 border">
+              <h4 className="font-medium mb-2">Pattern Analysis</h4>
+              <p className="text-sm">
+                {result?.summary?.pattern_analysis || result?.interpretation?.pattern_description || "—"}
+              </p>
+            </div>
+            <div className="p-4 rounded-lg bg-purple-50 border">
+              <h4 className="font-medium mb-2">Spatial Distribution</h4>
+              <p className="text-sm">
+                {result?.summary?.location_analysis || result?.interpretation?.location_analysis || "—"}
+              </p>
+            </div>
+          </div>
+
+          {result?.regional_analysis?.length > 0 && (
+            <div className="mt-6 overflow-x-auto">
+              <h3 className="font-medium mb-3">Detailed Regional Analysis</h3>
+              <table className="w-full text-sm border">
+                <thead>
+                  <tr className="bg-slate-50">
+                    <th className="text-left p-2">Region</th>
+                    <th className="text-left p-2">Size (px)</th>
+                    <th className="text-left p-2">Size %</th>
+                    <th className="text-left p-2">Location</th>
+                    <th className="text-left p-2">Importance</th>
+                    <th className="text-left p-2">Eccentricity</th>
+                    <th className="text-left p-2">Solidity</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.regional_analysis.map((r) => (
+                    <tr key={r.region_number} className="border-t">
+                      <td className="p-2">Region {r.region_number}</td>
+                      <td className="p-2">{r.size_pixels}</td>
+                      <td className="p-2">{r.size_percentage}</td>
+                      <td className="p-2">{r.location}</td>
+                      <td className="p-2">{r.importance}</td>
+                      <td className="p-2">{r.eccentricity}</td>
+                      <td className="p-2">{r.solidity}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
-        </motion.section>
-      )}
 
-      {/* Results */}
-      {result && (
-        <>
-          <div className="text-center mb-4">
-            <button onClick={reset} className="btn-secondary">
-              Analyze Another MRI
-            </button>
-          </div>
-          <ComprehensiveAnalysis result={result} />
-        </>
+          {result?.interpretation?.medical_interpretation && (
+            <div className="mt-6 p-4 rounded-lg bg-amber-50 border">
+              <h3 className="font-medium mb-2">Medical Interpretation</h3>
+              <div className="text-sm font-medium mb-1">
+                {result.interpretation.medical_interpretation.assessment}
+              </div>
+              {result.interpretation.medical_interpretation.observations?.length > 0 && (
+                <ul className="list-disc pl-5 text-sm">
+                  {result.interpretation.medical_interpretation.observations.map((t, i) => (
+                    <li key={i}>{t}</li>
+                  ))}
+                </ul>
+              )}
+              {result.interpretation.medical_interpretation.recommendations?.length > 0 && (
+                <div className="mt-3">
+                  <div className="font-medium mb-1">Recommendations</div>
+                  <ul className="list-disc pl-5 text-sm">
+                    {result.interpretation.medical_interpretation.recommendations.map((t, i) => (
+                      <li key={i}>{t.replace(/[✓⚠]/g, "").trim()}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
       )}
     </div>
   );
