@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Brain, Activity, Zap, FileImage, Settings, Github, Twitter, AlertCircle, RefreshCw } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import ModelManager from "./components/ModelManager";
@@ -11,35 +11,30 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("analyze");
   const { state, dispatch } = useModel();
   const [backendStatus, setBackendStatus] = useState({ online: true, modelLoaded: false, checking: true });
+  const statusIntervalRef = useRef(null);
 
-  // Poll backend status
   useEffect(() => {
-    let stop = false;
     const fetchStatus = async () => {
       try {
         const res = await fetch(`${BASE}/api/status`);
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
-        if (!stop) setBackendStatus({ online: true, modelLoaded: !!data.model_loaded, checking: false });
+        setBackendStatus({ online: true, modelLoaded: !!data.model_loaded, checking: false });
       } catch {
-        if (!stop) setBackendStatus({ online: false, modelLoaded: false, checking: false });
+        setBackendStatus({ online: false, modelLoaded: false, checking: false });
       }
     };
-    fetchStatus();
-    const t = setInterval(fetchStatus, 5000);
-    return () => {
-      stop = true;
-      clearInterval(t);
-    };
-  }, []);
 
-  // Demo mode (optional)
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (!state.isModelReady) dispatch({ type: "READY", payload: true });
-    }, 2000);
-    return () => clearTimeout(timer);
-  }, [state.isModelReady, dispatch]);
+    // This robust pattern ensures only one interval is ever active.
+    if (statusIntervalRef.current) clearInterval(statusIntervalRef.current);
+    
+    fetchStatus(); // Initial fetch
+    statusIntervalRef.current = setInterval(fetchStatus, 10000); // Poll every 10 seconds
+
+    return () => {
+      if (statusIntervalRef.current) clearInterval(statusIntervalRef.current);
+    };
+  }, []); // Empty dependency array means this runs only once on mount
 
   const reloadModel = async () => {
     try {
@@ -56,14 +51,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
-      {/* Background decoration */}
-      <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-purple-300 rounded-full mix-blend-multiply blur-3xl opacity-20 animate-[float_6s_ease-in-out_infinite]" />
-        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-pink-300 rounded-full mix-blend-multiply blur-3xl opacity-20 animate-[float_6s_ease-in-out_infinite_1s]" />
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-indigo-300 rounded-full mix-blend-multiply blur-3xl opacity-10 animate-[float_6s_ease-in-out_infinite_2s]" />
-      </div>
-
-      {/* Header */}
+      {/* Header and other UI elements remain the same */}
       <header className="relative bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/70 dark:border-slate-800">
         <div className="max-w-7xl mx-auto px-6 py-5">
           <div className="flex items-center justify-between">
@@ -123,19 +111,11 @@ export default function App() {
                 <RefreshCw className="w-4 h-4" />
                 Reload
               </button>
-
-              <a className="text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100" href="#" aria-label="GitHub">
-                <Github className="w-5 h-5" />
-              </a>
-              <a className="text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100" href="#" aria-label="Twitter">
-                <Twitter className="w-5 h-5" />
-              </a>
             </nav>
           </div>
         </div>
       </header>
-
-      {/* Main */}
+      
       <main className="relative max-w-7xl mx-auto px-6 py-8">
         {/* Tabs */}
         <div className="flex items-center justify-center mb-8">
@@ -172,18 +152,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Demo message */}
-        {state.isModelReady && !backendStatus.modelLoaded && (
-          <div className="mb-6 p-4 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900">
-            <div className="flex items-center gap-2">
-              <AlertCircle className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-              <p className="text-sm text-blue-700 dark:text-blue-300">
-                Demo mode enabled. Upload an image to see AI output. Use the Models tab or Reload button to load a real model.
-              </p>
-            </div>
-          </div>
-        )}
-
         {/* Content */}
         <AnimatePresence mode="wait">
           <motion.div
@@ -197,8 +165,7 @@ export default function App() {
           </motion.div>
         </AnimatePresence>
       </main>
-
-      {/* Footer */}
+      
       <footer className="relative mt-20 border-t border-slate-200 dark:border-slate-800">
         <div className="max-w-7xl mx-auto px-6 py-8">
           <div className="flex items-center justify-between">

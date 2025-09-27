@@ -12,16 +12,15 @@ from skimage.morphology import remove_small_objects
 
 class TrueExplainableAIWeb:
     """
-    Web-compatible TrueExplainableAI:
-    - Uses arrays (no file paths)
-    - Produces sensitivity map via occlusion
-    - Analyzes regions and generates interpretation
-    - Builds web-ready visualizations (base64 PNGs)
+    Deterministic, web-compatible XAI:
+    - float32 math; seeded RNG
+    - occlusion uses mean-patch by default (deterministic)
+    - visual outputs returned as base64 PNG
     """
-
-    def __init__(self, model, class_names):
+    def __init__(self, model, class_names, seed: int = 123):
         self.model = model
         self.class_names = class_names
+        self.rng = np.random.default_rng(seed)
 
     def validate_occlusion_results(self, img_array, sensitivity_map, predicted_class_idx):
         threshold = np.percentile(sensitivity_map, 90)
@@ -237,24 +236,31 @@ class TrueExplainableAIWeb:
             ]
         return interpretation
 
-    def occlusion_analysis(self, img_array, predicted_class_idx, window_size=32, stride=16):
+    def occlusion_analysis(self, img_array, predicted_class_idx, window_size=32, stride=16, occluder="mean"):
+        """
+        Deterministic occlusion. occluder: "mean" (default) or "noise".
+        """
         img_array = img_array.astype(np.float32, copy=False)
         original_prob = float(self.model.predict(img_array, verbose=0)[0][predicted_class_idx])
 
-        height, width = 224, 224
-        sensitivity_map = np.zeros((height, width), dtype=np.float32)
+        H, W = 224, 224
+        sensitivity_map = np.zeros((H, W), dtype=np.float32)
         noise_level = float(np.std(img_array)) * 0.5
 
-        for i in range(0, height - window_size + 1, stride):
-            for j in range(0, width - window_size + 1, stride):
+        for i in range(0, H - window_size + 1, stride):
+            for j in range(0, W - window_size + 1, stride):
                 occluded = img_array.astype(np.float32, copy=True)
-                noise = np.random.normal(0.0, noise_level, (window_size, window_size, 3)).astype(np.float32)
-                occluded[0, i:i+window_size, j:j+window_size, :] += noise
+                if occluder == "noise":
+                    patch = self.rng.normal(0.0, noise_level, (window_size, window_size, 3)).astype(np.float32)
+                    occluded[0, i:i+window_size, j:j+window_size, :] += patch
+                else:
+                    patch = np.full((window_size, window_size, 3), fill_value=np.mean(img_array), dtype=np.float32)
+                    occluded[0, i:i+window_size, j:j+window_size, :] = patch
 
                 new_prob = float(self.model.predict(occluded, verbose=0)[0][predicted_class_idx])
-                sensitivity = max(0.0, original_prob - new_prob)
+                drop = max(0.0, original_prob - new_prob)
                 sensitivity_map[i:i+window_size, j:j+window_size] = np.maximum(
-                    sensitivity_map[i:i+window_size, j:j+window_size], sensitivity
+                    sensitivity_map[i:i+window_size, j:j+window_size], drop
                 )
 
         sensitivity_map = gaussian_filter(sensitivity_map, sigma=2)
@@ -264,32 +270,20 @@ class TrueExplainableAIWeb:
         return sensitivity_map
 
     @staticmethod
-    def _to_uint8_image(img_like):
-        """
-        Convert any float image (possibly [-1,1] or [0,1] or [0,255]) to uint8 [0,255].
-        """
-        arr = np.array(img_like)
+    def _to_uint8_image(arr):
+        arr = np.array(arr)
         if arr.dtype != np.uint8:
-            if arr.max() <= 1.0 and arr.min() >= 0.0:
-                arr = (arr * 255.0)
-            elif arr.min() < 0.0 and arr.max() <= 1.0:
-                # unlikely, but handle
-                arr = (arr - arr.min()) / (arr.max() - arr.min() + 1e-8) * 255.0
-            elif arr.min() < 0.0 and arr.max() <= 1.0:
+            if arr.min() < 0.0:
                 arr = (arr + 1.0) * 127.5
-            elif arr.max() <= 255.0 and arr.min() >= 0.0:
-                # already in 0..255 float
-                pass
+            elif arr.max() <= 1.0:
+                arr = arr * 255.0
             else:
-                # general normalization
                 arr = (arr - arr.min()) / (arr.max() - arr.min() + 1e-8) * 255.0
             arr = np.clip(arr, 0, 255).astype(np.uint8)
         return arr
 
     def create_visualizations(self, img_array_224, sensitivity_map, regions_analysis):
         visuals = {}
-
-        # Ensure uint8 for viz
         img_u8 = self._to_uint8_image(img_array_224)
 
         # Original
@@ -299,7 +293,7 @@ class TrueExplainableAIWeb:
         buf.seek(0)
         visuals["original"] = f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-        # Sensitivity overlay (uint8 safe)
+        # Sensitivity overlay
         heat_u8 = np.uint8(np.clip(sensitivity_map, 0, 1) * 255)
         heat_col = cv2.applyColorMap(heat_u8, cv2.COLORMAP_HOT)
         heat_col = cv2.cvtColor(heat_col, cv2.COLOR_BGR2RGB)
@@ -330,31 +324,18 @@ class TrueExplainableAIWeb:
 
         return visuals
 
-    def explain_from_array(self, img_array, predicted_class_idx, predicted_class, confidence, mode="quick"):
-        # Ensure float32 for math
+    def explain_from_array(self, img_array, predicted_class_idx, predicted_class, confidence, mode="full", occluder="mean"):
         img_array = img_array.astype(np.float32, copy=False)
-
         t0 = time.time()
-        if mode == "quick":
-            window_size, stride = 64, 32
-        else:
-            window_size, stride = 32, 16
+        window_size, stride = (32, 16) if mode == "full" else (64, 32)
 
-        sensitivity_map = self.occlusion_analysis(img_array, predicted_class_idx, window_size, stride)
+        sensitivity_map = self.occlusion_analysis(img_array, predicted_class_idx, window_size, stride, occluder=occluder)
         validation = self.validate_occlusion_results(img_array, sensitivity_map, predicted_class_idx)
         regions_analysis = self.analyze_sensitivity_patterns(sensitivity_map)
         interpretation = self.generate_dynamic_interpretation(regions_analysis, predicted_class, confidence)
 
-        # For visualization, denormalize to uint8 smartly
         img_disp = img_array[0]
-        # EfficientNet preprocess can be in [0,255] float or [-1,1] depending on version; normalize robustly
-        if img_disp.dtype != np.uint8:
-            if img_disp.min() < 0.0:  # likely [-1, 1]
-                img_disp = (img_disp + 1.0) * 127.5
-            elif img_disp.max() <= 1.0:  # [0,1]
-                img_disp = img_disp * 255.0
-        img_disp = np.clip(img_disp, 0, 255).astype(np.uint8)
-
+        img_disp = self._to_uint8_image(img_disp)
         visuals = self.create_visualizations(img_disp, sensitivity_map, regions_analysis)
 
         dt = time.time() - t0

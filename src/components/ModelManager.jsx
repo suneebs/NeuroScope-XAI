@@ -1,375 +1,241 @@
-  import { useEffect, useRef, useState } from "react";
-  import { motion } from "framer-motion";
-  import { 
-    Download, Upload, Cpu, PlayCircle, PauseCircle, 
-    CheckCircle2, AlertCircle, Loader2, Sparkles, 
-    Database, Zap, TrendingUp 
-  } from "lucide-react";
-  import { useModel } from "../context/ModelContext";
-  import { api } from "../services/api";
+import { useEffect, useRef, useState } from "react";
+import { Loader2, Database, Rocket, CheckCircle2, Play, Square } from "lucide-react";
+import { useTrainingStatus } from "../hooks/useTrainingStatus"; // Make sure you have this hook from the previous step
 
-  export default function ModelManager() {
-    const { state, dispatch } = useModel();
-    const fileRef = useRef(null);
-    const [training, setTraining] = useState({ progress: 0 });
-    const [config, setConfig] = useState({ epochs: 10, batchSize: 16, lr: 0.0001, augment: true });
+const BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
-    useEffect(() => {
-      (async () => {
-        const res = await api.listModels();
-        dispatch({
-          type: "SET_MODELS",
-          payload: res.models,
-        });
-      })();
-    }, [dispatch]);
+export default function ModelManager() {
+  const [dataset, setDataset] = useState({ type: "kaggle", kaggleId: "masoudnickparvar/brain-tumor-mri-dataset", localPath: "" });
+  // Set safer defaults for CPU training
+  const [config, setConfig] = useState({ 
+    epochs: 10, 
+    batchSize: 16, // Lowered batch size
+    lr: 0.001, 
+    augment: true, 
+    modelName: "bt_efficientnet_b0_v1", 
+    backbone: "B0", // Default to the lighter B0 model
+    dryRun: false 
+  });
+  const [jobId, setJobId] = useState(null);
+  const [startError, setStartError] = useState("");
+  
+  const { status, error: pollError, isPolling } = useTrainingStatus(jobId);
 
-    const handleDownload = async (id) => {
-      dispatch({ type: "STATUS", payload: "downloading" });
-      dispatch({ type: "PROGRESS", payload: 0 });
-      try {
-        await api.downloadModel(id, (p) => dispatch({ type: "PROGRESS", payload: p }));
-        dispatch({ type: "STATUS", payload: "idle" });
-      } catch (e) {
-        dispatch({ type: "STATUS", payload: "error" });
-        dispatch({ type: "ERROR", payload: e.message });
-      }
-    };
+  const startTraining = async () => {
+    setStartError("");
+    setJobId(null); 
+    try {
+      const payload = { dataset, ...config };
+      const res = await fetch(`${BASE}/api/train/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setJobId(data.jobId); 
+    } catch (e) {
+      setStartError(e.message || "Failed to start training");
+    }
+  };
+  
+  const stopTraining = async () => {
+    if (!jobId) return;
+    try {
+      await fetch(`${BASE}/api/train/stop`, { 
+        method: "POST", 
+        headers: { "Content-Type": "application/json" }, 
+        body: JSON.stringify({ jobId: jobId }) 
+      });
+    } catch (e) {
+      console.error("Failed to send stop request", e);
+    }
+  };
 
-    const handleUpload = async (file) => {
-      dispatch({ type: "STATUS", payload: "downloading" });
-      try {
-        const up = await api.uploadModel(file, (p) => dispatch({ type: "PROGRESS", payload: p }));
-        dispatch({
-          type: "SET_MODELS",
-          payload: [{ id: up.id, name: up.name, source: "uploaded" }, ...state.availableModels],
-        });
-        dispatch({ type: "STATUS", payload: "idle" });
-      } catch (e) {
-        dispatch({ type: "STATUS", payload: "error" });
-        dispatch({ type: "ERROR", payload: e.message });
-      }
-    };
+  const setActiveModel = async () => {
+    if (!status?.artifacts?.model) return;
+    try {
+      const res = await fetch(`${BASE}/api/models/use`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          modelPath: status.artifacts.model,
+          classesPath: status.artifacts.classes,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await res.json();
+      alert("Active model updated for inference! You can now go to the 'Analyze' tab.");
+    } catch (e) {
+      alert(e.message || "Failed to set active model");
+    }
+  };
 
-    const handleLoad = async () => {
-      if (!state.selectedModel) return;
-      try {
-        await api.loadModel(state.selectedModel.id);
-        dispatch({ type: "READY", payload: true });
-      } catch (e) {
-        dispatch({ type: "ERROR", payload: e.message });
-      }
-    };
+  const isTrainingRunning = status?.status === 'running';
 
-    const startTraining = async () => {
-      dispatch({ type: "STATUS", payload: "training" });
-      const res = await api.startTraining(config);
-      
-      const interval = setInterval(async () => {
-        const s = await api.trainingStatus(res.jobId);
-        setTraining({
-          progress: s.progress,
-          epoch: s.epoch,
-          totalEpochs: s.totalEpochs,
-          loss: s.metrics.loss,
-          valLoss: s.metrics.valLoss,
-        });
-        dispatch({ type: "PROGRESS", payload: s.progress });
-        if (s.status === "completed") {
-          clearInterval(interval);
-          dispatch({ type: "STATUS", payload: "idle" });
-          dispatch({ type: "READY", payload: true });
-        }
-      }, 1000);
-    };
-
-    return (
-      <div className="grid lg:grid-cols-2 gap-8">
-        {/* Model Catalog */}
-        <motion.section 
-          initial={{ opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
-          className="card-pro p-6"
-        >
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
-                <Database className="w-5 h-5 text-white" />
-              </div>
-              <h2 className="text-xl font-semibold">Model Catalog</h2>
-            </div>
-            <button
-              className="btn-secondary flex items-center gap-2"
-              onClick={() => fileRef.current?.click()}
+  return (
+    <div className="space-y-8">
+      {/* Config Section */}
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm p-6">
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {/* Dataset Column */}
+          <div className="space-y-3">
+            <h3 className="font-semibold flex items-center gap-2"><Database className="w-4 h-4" /> Dataset</h3>
+            <select
+              className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm"
+              value={dataset.type}
+              onChange={(e) => setDataset({ ...dataset, type: e.target.value })}
             >
-              <Upload className="w-4 h-4" />
-              Upload
-            </button>
-          </div>
-
-          <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
-            {state.availableModels.map((model, idx) => (
-              <motion.div
-                key={model.id}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: idx * 0.1 }}
-                className={`
-                  p-4 rounded-xl border transition-all cursor-pointer
-                  ${state.selectedModel?.id === model.id
-                    ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-950/20"
-                    : "border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700"
-                  }
-                `}
-                onClick={() => dispatch({ type: "SELECT_MODEL", payload: model })}
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-medium">{model.name}</h3>
-                      {model.version && (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
-                          v{model.version}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3 mt-2 text-sm text-slate-600 dark:text-slate-400">
-                      <span className="flex items-center gap-1">
-                        <Cpu className="w-3 h-3" />
-                        {model.sizeMB}MB
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Sparkles className="w-3 h-3" />
-                        {model.source}
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDownload(model.id);
-                    }}
-                    className="btn-primary py-2 px-4 text-sm"
-                  >
-                    <Download className="w-4 h-4" />
-                  </button>
-                </div>
-              </motion.div>
-            ))}
-
-            {!state.availableModels.length && (
-              <div className="text-center py-12">
-                <Database className="w-12 h-12 mx-auto text-slate-300 dark:text-slate-700 mb-3" />
-                <p className="text-slate-600 dark:text-slate-400">No models available</p>
-                <p className="text-sm text-slate-500 dark:text-slate-500 mt-1">
-                  Upload a model to get started
-                </p>
+              <option value="kaggle">Kaggle (Default)</option>
+              <option value="local">Local Path</option>
+            </select>
+            {dataset.type === "kaggle" ? (
+              <div>
+                <label className="text-xs font-medium">Kaggle ID</label>
+                <input className="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm" value={dataset.kaggleId} onChange={(e) => setDataset({ ...dataset, kaggleId: e.target.value })} />
+                <p className="text-xs text-slate-500 mt-1">Ensure Kaggle API is configured on backend.</p>
+              </div>
+            ) : (
+              <div>
+                <label className="text-xs font-medium">Local Path</label>
+                <input className="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm" value={dataset.localPath} onChange={(e) => setDataset({ ...dataset, localPath: e.target.value })} />
+                <p className="text-xs text-slate-500 mt-1">Must contain 'Training' and 'Testing' subfolders.</p>
               </div>
             )}
           </div>
 
-          {/* Progress bar */}
-          {state.status === "downloading" && (
-            <motion.div 
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="mt-4 p-4 rounded-xl bg-indigo-50 dark:bg-indigo-950/20"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-indigo-700 dark:text-indigo-400">
-                  Downloading model...
-                </span>
-                <span className="text-sm font-medium text-indigo-700 dark:text-indigo-400">
-                  {state.progress}%
-                </span>
+          {/* Training Column */}
+          <div className="space-y-3">
+            <h3 className="font-semibold flex items-center gap-2"><Rocket className="w-4 h-4" /> Training Parameters</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-medium">Epochs</label>
+                <input type="number" min={1} className="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm" value={config.epochs} onChange={(e) => setConfig({ ...config, epochs: parseInt(e.target.value || "1") })} />
               </div>
-              <div className="w-full h-2 rounded-full bg-indigo-200 dark:bg-indigo-900/50 overflow-hidden">
-                <motion.div
-                  className="h-full gradient-brand"
-                  initial={{ width: 0 }}
-                  animate={{ width: `${state.progress}%` }}
-                  transition={{ duration: 0.3 }}
-                />
+              <div>
+                <label className="text-xs font-medium">Batch Size</label>
+                <input type="number" min={1} className="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm" value={config.batchSize} onChange={(e) => setConfig({ ...config, batchSize: parseInt(e.target.value || "1") })} />
               </div>
-            </motion.div>
-          )}
-
-          <input
-            type="file"
-            accept=".onnx,.pt,.pth,.pb,.h5,.json,.bin"
-            ref={fileRef}
-            onChange={(e) => e.target.files?.[0] && handleUpload(e.target.files[0])}
-            className="hidden"
-          />
-        </motion.section>
-
-        {/* Training Control */}
-        <motion.section 
-          initial={{ opacity: 0, x: 20 }}
-          animate={{ opacity: 1, x: 0 }}
-          className="card-pro p-6"
-        >
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center">
-              <Zap className="w-5 h-5 text-white" />
+              <div>
+                <label className="text-xs font-medium">Learning Rate</label>
+                <input type="number" step="0.00001" min={0} className="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm" value={config.lr} onChange={(e) => setConfig({ ...config, lr: parseFloat(e.target.value || "0.001") })} />
+              </div>
+              <div className="flex items-center gap-2 pt-6">
+                <input id="augment" type="checkbox" className="rounded" checked={config.augment} onChange={(e) => setConfig({ ...config, augment: e.target.checked })} />
+                <label htmlFor="augment" className="text-sm font-medium">Augment</label>
+              </div>
             </div>
-            <h2 className="text-xl font-semibold">Model Training</h2>
+            <div>
+              <label className="text-xs font-medium">Model Backbone</label>
+              <select 
+                className="w-full mt-1 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm" 
+                value={config.backbone} 
+                onChange={(e) => setConfig({ ...config, backbone: e.target.value, modelName: `bt_efficientnet_${e.target.value.toLowerCase()}_v1` })}
+              >
+                <option value="B0">EfficientNetB0 (Fast, good for CPU)</option>
+                <option value="B4">EfficientNetB4 (Powerful, needs GPU or lots of RAM)</option>
+              </select>
+            </div>
           </div>
 
-          {/* Model selection status */}
-          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/50 mb-6">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-medium text-slate-600 dark:text-slate-400">
-                Selected Model
-              </span>
-              {state.isModelReady && (
-                <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
-                  <CheckCircle2 className="w-3 h-3" />
-                  Ready
-                </span>
-              )}
+          {/* Action Column */}
+          <div className="space-y-3">
+            <h3 className="font-semibold">Action</h3>
+            <div>
+              <label className="text-xs font-medium">Save Model As</label>
+              <input className="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm" value={config.modelName} onChange={(e) => setConfig({ ...config, modelName: e.target.value })} />
             </div>
-            <div className="font-medium">
-              {state.selectedModel ? state.selectedModel.name : "No model selected"}
+            <div className="flex items-center gap-2 pt-2">
+              <input id="dryRun" type="checkbox" className="rounded" checked={config.dryRun} onChange={(e) => setConfig({ ...config, dryRun: e.target.checked })} />
+              <label htmlFor="dryRun" className="text-sm font-medium">Quick Test Run (1 epoch, few steps)</label>
             </div>
-            {state.selectedModel && !state.isModelReady && (
-              <button onClick={handleLoad} className="btn-primary mt-3 w-full">
-                Load Model
+            <button
+              onClick={startTraining}
+              disabled={isTrainingRunning}
+              className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
+            >
+              <Play className="w-4 h-4" /> Start Training
+            </button>
+            {startError && (
+              <p className="text-xs text-red-500">{startError}</p>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* Progress Section */}
+      {jobId && (
+        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm p-6">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-lg">Training Progress (Job ID: {jobId.slice(4)})</h3>
+            {isTrainingRunning && (
+              <button onClick={stopTraining} className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-white bg-red-600 hover:bg-red-700">
+                <Square className="w-4 h-4" /> Stop
               </button>
             )}
           </div>
-
-          {/* Training Configuration */}
-          <div className="space-y-4 mb-6">
-            <h3 className="font-medium text-sm text-slate-700 dark:text-slate-300">
-              Training Configuration
-            </h3>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="text-sm font-medium text-slate-600 dark:text-slate-400 mb-1 block">
-                  Epochs
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  className="input-field"
-                  value={config.epochs}
-                  onChange={(e) => setConfig({ ...config, epochs: parseInt(e.target.value || "1") })}
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium text-slate-600 dark:text-slate-400 mb-1 block">
-                  Batch Size
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  className="input-field"
-                  value={config.batchSize}
-                  onChange={(e) => setConfig({ ...config, batchSize: parseInt(e.target.value || "1") })}
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium text-slate-600 dark:text-slate-400 mb-1 block">
-                  Learning Rate
-                </label>
-                <input
-                  type="number"
-                  step="0.00001"
-                  min={0}
-                  className="input-field"
-                  value={config.lr}
-                  onChange={(e) => setConfig({ ...config, lr: parseFloat(e.target.value || "0.0001") })}
-                />
-              </div>
-              <div className="flex items-center">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={config.augment}
-                    onChange={(e) => setConfig({ ...config, augment: e.target.checked })}
-                    className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                  />
-                  <span className="text-sm font-medium text-slate-600 dark:text-slate-400">
-                    Data Augmentation
-                  </span>
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <button
-            onClick={startTraining}
-            disabled={!state.isModelReady || state.status === "training"}
-            className="btn-primary w-full flex items-center justify-center gap-2"
-          >
-            {state.status === "training" ? (
-              <>
+          
+          {!status && isPolling && (
+             <div className="flex items-center gap-2 text-sm text-slate-500">
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Training...
-              </>
-            ) : (
-              <>
-                <PlayCircle className="w-4 h-4" />
-                Start Training
-              </>
-            )}
-          </button>
-
-          {/* Training progress */}
-          {state.status === "training" && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="mt-6 p-4 rounded-xl bg-gradient-to-br from-purple-50 to-pink-50 dark:from-purple-950/20 dark:to-pink-950/20"
-            >
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <TrendingUp className="w-4 h-4 text-purple-600 dark:text-purple-400" />
-                  <span className="text-sm font-medium">
-                    Epoch {training.epoch || 0} / {training.totalEpochs || 0}
-                  </span>
-                </div>
-                <span className="text-sm font-medium text-purple-600 dark:text-purple-400">
-                  {training.progress}%
-                </span>
-              </div>
-              <div className="w-full h-2 rounded-full bg-purple-200 dark:bg-purple-900/50 overflow-hidden mb-3">
-                <motion.div
-                  className="h-full bg-gradient-to-r from-purple-500 to-pink-500"
-                  initial={{ width: 0 }}
-                  animate={{ width: `${training.progress}%` }}
-                  transition={{ duration: 0.3 }}
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-600 dark:text-slate-400">Loss</span>
-                  <span className="font-mono font-medium">
-                    {training.loss?.toFixed(4) || "—"}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-600 dark:text-slate-400">Val Loss</span>
-                  <span className="font-mono font-medium">
-                    {training.valLoss?.toFixed(4) || "—"}
-                  </span>
-                </div>
-              </div>
-            </motion.div>
+                Connecting to training job...
+             </div>
           )}
 
-          {state.error && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="mt-4 p-3 rounded-lg bg-red-50 dark:bg-red-950/20 flex items-start gap-2"
-            >
-              <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 mt-0.5" />
-              <p className="text-sm text-red-600 dark:text-red-400">{state.error}</p>
-            </motion.div>
+          {status && (
+            <>
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <div>
+                      Status:{" "}
+                      <span className={`font-medium ${status.status === "completed" ? "text-emerald-600" : status.status === "error" ? "text-red-600" : "text-indigo-600"}`}>{status.status}</span>
+                    </div>
+                    <div>{status.epoch}/{status.totalEpochs} epochs</div>
+                  </div>
+                  <div className="w-full h-2 rounded bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                    <div className="h-2 bg-indigo-500 transition-[width]" style={{ width: `${status.progress || 0}%` }} />
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    Phase: {status.phase} - {status.message}
+                  </div>
+                </div>
+
+                {status.metrics && Object.keys(status.metrics).length > 0 && (
+                  <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800">
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div>Loss: <span className="font-mono">{status.metrics.loss?.toFixed(4)}</span></div>
+                      <div>Val Loss: <span className="font-mono">{status.metrics.val_loss?.toFixed(4)}</span></div>
+                      <div>Accuracy: <span className="font-mono">{status.metrics.accuracy?.toFixed(4)}</span></div>
+                      <div>Val Accuracy: <span className="font-mono">{status.metrics.val_accuracy?.toFixed(4)}</span></div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {status.status === "completed" && (
+                <div className="mt-4 p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900">
+                  <h4 className="font-medium text-emerald-800 dark:text-emerald-300 mb-2">Training Complete</h4>
+                  <ul className="text-sm list-disc pl-5">
+                    {Object.entries(status.artifacts).map(([k, v]) => (
+                      <li key={k}><span className="font-medium">{k}:</span> <span className="text-slate-600">{v}</span></li>
+                    ))}
+                  </ul>
+                  <button onClick={setActiveModel} className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-white bg-emerald-600 hover:bg-emerald-700">
+                    <CheckCircle2 className="w-4 h-4" /> Use this model for inference
+                  </button>
+                </div>
+              )}
+              {(status.status === "error" || pollError) && (
+                <div className="mt-4 p-4 rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900">
+                  <h4 className="font-medium text-red-800 dark:text-red-300">Error</h4>
+                  <p className="text-sm text-red-700 dark:text-red-400">{status.message || pollError}</p>
+                </div>
+              )}
+            </>
           )}
-        </motion.section>
-      </div>
-    );
-  }
+        </section>
+      )}
+    </div>
+  );
+}

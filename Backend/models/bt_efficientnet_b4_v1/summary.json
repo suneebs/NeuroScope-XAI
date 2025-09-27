@@ -1,0 +1,18 @@
+{
+  "train_loss": 0.42300647497177124,
+  "train_accuracy": 0.8687499761581421,
+  "valid_loss": 0.5234207510948181,
+  "valid_accuracy": 0.831250011920929,
+  "test_loss": 0.6173154711723328,
+  "test_accuracy": 0.8187500238418579,
+  "epochs": 10,
+  "batch_size": 16,
+  "lr": 0.001,
+  "backbone": "B4",
+  "classes": [
+    "glioma",
+    "meningioma",
+    "notumor",
+    "pituitary"
+  ]
+}
