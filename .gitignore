@@ -23,3 +23,4 @@ dist-ssr
 *.sln
 *.sw?
 Backend/models/brain_tumor_model.h5
+Backend/models/bt_efficientnet_b4_v1/model.keras
